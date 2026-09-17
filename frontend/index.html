@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GEOSCAN</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Arial, sans-serif; background: #f3f5f7; }
+    header { height: 72px; background: #17212b; color: white;
+             display: flex; align-items: center; padding: 0 25px; }
+    header h1 { margin: 0; font-size: 27px; }
+    header span { margin-left: 25px; font-size: 17px; color: #cbd5df; }
+    .layout { display: grid; grid-template-columns: 360px 1fr;
+              height: calc(100vh - 72px); }
+    .sidebar { background: white; padding: 22px; overflow-y: auto;
+               border-right: 1px solid #ddd; }
+    label { display: block; margin-top: 14px; margin-bottom: 6px;
+            font-weight: bold; font-size: 14px; }
+    input, select { width: 100%; padding: 9px; border: 1px solid #bbb;
+                    border-radius: 6px; font-size: 15px; }
+    button { width: 100%; padding: 11px; margin-top: 12px; border: none;
+             border-radius: 6px; font-size: 15px; cursor: pointer; }
+    #drawButton { background: #1976d2; color: white; }
+    #drawNfzButton { background: #c62828; color: white; }
+    #addLandingButton { background: #00838f; color: white; }
+    #calculateButton { background: #2e7d32; color: white; }
+    #kmlButton { background: #f57c00; color: white; }
+    #clearButton { background: #eeeeee; }
+    .instructions { margin-top: 18px; padding: 12px; background: #eef4fa;
+                    border-radius: 7px; font-size: 14px; line-height: 1.5; }
+    .results { margin-top: 20px; padding: 15px; background: #f0f3f6;
+               border-radius: 8px; }
+    .result { margin-bottom: 12px; }
+    .result-title { color: #666; font-size: 13px; }
+    .result-value { font-size: 20px; font-weight: bold; margin-top: 3px; }
+    #map { width: 100%; height: 100%; }
+    .success { display: none; margin-top: 15px; padding: 12px;
+               background: #e8f5e9; color: #2e7d32; border-radius: 7px; }
+    .error { display: none; margin-top: 15px; padding: 12px;
+             background: #ffebee; color: #c62828; border-radius: 7px; }
+    .warning { display: none; margin-top: 15px; padding: 12px;
+               background: #fff8e1; color: #f57c00; border-radius: 7px; }
+    .drone-metrics { margin-top: 10px; font-size: 13px; color: #555; }
+    .drone-metrics div { padding: 4px 0; border-bottom: 1px solid #e0e0e0; }
+    .landing-icon { font-size: 20px; }
+</style>
+</head>
+<body>
+
+<header>
+    <h1>GEOSCAN</h1>
+    <span>Планирование маршрута БВС для аэросъёмки</span>
+</header>
+
+<div class="layout">
+<aside class="sidebar">
+
+<h2>Параметры полёта</h2>
+
+<label>Метод маршрутизации</label>
+<select id="method">
+    <option value="set_cover">Точки покрытия (Set Cover)</option>
+    <option value="lawnmower">Змейка (Lawnmower)</option>
+</select>
+
+<label>Количество дронов</label>
+<input id="numDrones" type="number" value="1" min="1" max="10">
+
+<label>Ширина покрытия камеры, м</label>
+<input id="coverage" type="number" value="150" min="20">
+
+<label>Высота полёта, м</label>
+<input id="altitude" type="number" value="100" min="30" max="500">
+
+<label>Скорость дрона, км/ч</label>
+<input id="speed" type="number" value="54" min="10" max="200">
+
+<label>Запас хода, мин</label>
+<input id="endurance" type="number" value="40" min="5" max="300">
+
+<label>Скорость ветра, м/с</label>
+<input id="windSpeed" type="number" value="0" min="0" max="20">
+
+<label>Направление ветра, °</label>
+<input id="windAngle" type="number" value="0" min="0" max="360">
+
+<button id="drawButton">Нарисовать территорию</button>
+<button id="drawNfzButton">Нарисовать запретную зону</button>
+<button id="addLandingButton">Добавить резервную площадку</button>
+<button id="calculateButton">Рассчитать маршрут</button>
+<button id="kmlButton">Скачать KML</button>
+<button id="clearButton">Очистить карту</button>
+
+<div class="instructions">
+    <b>Как пользоваться:</b><br>
+    1. Нажми «Нарисовать территорию».<br>
+    2. Кликай по карте по углам области.<br>
+    3. Нажми на первую точку ещё раз — полигон замкнётся.<br>
+    4. (Опционально) Нарисуй запретные зоны.<br>
+    5. (Опционально) Добавь резервные площадки.<br>
+    6. Настрой параметры и нажми «Рассчитать маршрут».
+</div>
+
+<div id="success" class="success"></div>
+<div id="error" class="error"></div>
+<div id="warning" class="warning"></div>
+
+<div class="results">
+    <h3>Результаты</h3>
+    <div class="result">
+        <div class="result-title">Точек съёмки</div>
+        <div id="points" class="result-value">—</div>
+    </div>
+    <div class="result">
+        <div class="result-title">Покрытие</div>
+        <div id="coverageResult" class="result-value">—</div>
+    </div>
+    <div class="result">
+        <div class="result-title">Длина маршрута</div>
+        <div id="distance" class="result-value">—</div>
+    </div>
+    <div class="result">
+        <div class="result-title">Время полёта (макс.)</div>
+        <div id="timeResult" class="result-value">—</div>
+    </div>
+    <div id="droneMetrics" class="drone-metrics"></div>
+</div>
+
+</aside>
+
+<main>
+    <div id="map"></div>
+</main>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const map = L.map("map").setView([55.75, 37.61], 12);
+
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "&copy; OpenStreetMap contributors"
+}).addTo(map);
+
+let drawing = false;
+let drawingNfz = false;
+let addingLanding = false;
+let polygonPoints = [];
+let nfzPoints = [];
+let noFlyZones = [];
+let landingZones = [];
+let markers = [];
+let territoryLayer = null;
+let nfzLayer = null;
+let landingLayer = L.layerGroup().addTo(map);
+let routeLayer = L.layerGroup().addTo(map);
+let lastDroneRoutes = null;
+let lastRoute = null;
+
+function startDrawing() {
+    drawing = true;
+    drawingNfz = false;
+    addingLanding = false;
+    polygonPoints = [];
+    clearDrawingOnly();
+    showMessage("success", "Режим рисования включён. Кликай по карте.");
+}
+
+function startDrawingNfz() {
+    drawingNfz = true;
+    drawing = false;
+    addingLanding = false;
+    nfzPoints = [];
+    if (nfzLayer) {
+        map.removeLayer(nfzLayer);
+        nfzLayer = null;
+    }
+    showMessage("warning", "Рисуем запретную зону. Кликай по карте, замкни на первой точке.");
+}
+
+function startAddingLanding() {
+    addingLanding = true;
+    drawing = false;
+    drawingNfz = false;
+    showMessage("success", "Кликни по карте, чтобы добавить резервную площадку.");
+}
+
+map.on("click", function(event) {
+    const lat = event.latlng.lat;
+    const lon = event.latlng.lng;
+
+    if (drawing) {
+        polygonPoints.push([lat, lon]);
+        const marker = L.circleMarker([lat, lon], {
+            radius: 6, color: "#1976d2", fillColor: "#1976d2", fillOpacity: 1
+        }).addTo(map);
+        markers.push(marker);
+        drawTemporaryPolygon();
+
+        if (polygonPoints.length >= 3) {
+            const first = polygonPoints[0];
+            const dist = map.distance(event.latlng, L.latLng(first[0], first[1]));
+            if (dist < 50) finishDrawing();
+        }
+        return;
+    }
+
+    if (drawingNfz) {
+        nfzPoints.push([lat, lon]);
+        const marker = L.circleMarker([lat, lon], {
+            radius: 6, color: "#c62828", fillColor: "#c62828", fillOpacity: 1
+        }).addTo(map);
+        markers.push(marker);
+
+        if (nfzLayer) map.removeLayer(nfzLayer);
+        if (nfzPoints.length >= 2) {
+            nfzLayer = L.polygon(nfzPoints, {
+                color: "#c62828", weight: 2,
+                fillColor: "#c62828", fillOpacity: 0.3
+            }).addTo(map);
+        }
+
+        if (nfzPoints.length >= 3) {
+            const first = nfzPoints[0];
+            const dist = map.distance(event.latlng, L.latLng(first[0], first[1]));
+            if (dist < 50) finishNfz();
+        }
+        return;
+    }
+
+    if (addingLanding) {
+        landingZones.push([lat, lon]);
+        L.marker([lat, lon], {
+            icon: L.divIcon({
+                className: 'landing-icon',
+                html: '🛬',
+                iconSize: [24, 24]
+            })
+        }).bindPopup("Резервная площадка " + landingZones.length).addTo(landingLayer);
+        addingLanding = false;
+        showMessage("success", "Площадка добавлена. Нажми кнопку ещё раз для следующей.");
+    }
+});
+
+function drawTemporaryPolygon() {
+    if (territoryLayer) map.removeLayer(territoryLayer);
+    if (polygonPoints.length < 2) return;
+    territoryLayer = L.polygon(polygonPoints, {
+        color: "#f5c400", weight: 3,
+        fillColor: "#f5c400", fillOpacity: 0.15
+    }).addTo(map);
+}
+
+function finishDrawing() {
+    drawing = false;
+    showMessage("success", "Территория выбрана. Нажми «Рассчитать маршрут».");
+}
+
+function finishNfz() {
+    drawingNfz = false;
+    noFlyZones.push([...nfzPoints]);
+    nfzPoints = [];
+    showMessage("success", "Запретная зона добавлена. Можно рисовать ещё или считать маршрут.");
+}
+
+function clearDrawingOnly() {
+    markers.forEach(m => map.removeLayer(m));
+    markers = [];
+    if (territoryLayer) {
+        map.removeLayer(territoryLayer);
+        territoryLayer = null;
+    }
+}
+
+async function calculateRoute() {
+    hideMessages();
+
+    if (polygonPoints.length < 3) {
+        showMessage("error", "Сначала нарисуй территорию минимум из 3 точек.");
+        return;
+    }
+
+    const payload = {
+        coordinates: polygonPoints,
+        no_fly_zones: noFlyZones,
+        landing_zones: landingZones,
+        coverage_width: Number(document.getElementById("coverage").value),
+        method: document.getElementById("method").value,
+        num_drones: Number(document.getElementById("numDrones").value),
+        wind_speed: Number(document.getElementById("windSpeed").value),
+        wind_angle: Number(document.getElementById("windAngle").value),
+        altitude: Number(document.getElementById("altitude").value),
+        drone_speed_kmh: Number(document.getElementById("speed").value),
+        drone_endurance_min: Number(document.getElementById("endurance").value)
+    };
+
+    try {
+        const response = await fetch("/api/plan", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.detail || "Ошибка сервера");
+        }
+
+        const data = await response.json();
+        lastRoute = data.route;
+        lastDroneRoutes = data.drone_routes;
+
+        routeLayer.clearLayers();
+
+        const colors = ["#e53935", "#43a047", "#1e88e5", "#fb8c00", "#8e24aa",
+                        "#00897b", "#c0ca33", "#6d4c41", "#3949ab", "#d81b60"];
+
+        if (data.drone_routes && Object.keys(data.drone_routes).length > 0) {
+            let ci = 0;
+            for (const [droneId, droneRoute] of Object.entries(data.drone_routes)) {
+                if (!droneRoute || droneRoute.length < 2) continue;
+                const coords = droneRoute.map(p => [p[0], p[1]]);
+                L.polyline(coords, {
+                    color: colors[ci % colors.length], weight: 3
+                }).bindPopup(droneId).addTo(routeLayer);
+                ci++;
+            }
+        } else {
+            const routeCoords = data.route.map(p => [p[0], p[1]]);
+            L.polyline(routeCoords, {
+                color: "#d32f2f", weight: 3, opacity: 0.85
+            }).addTo(routeLayer);
+
+            (data.selected_points || []).forEach((p, i) => {
+                L.circleMarker([p[0], p[1]], {
+                    radius: 5, color: "#1565c0",
+                    fillColor: "#1976d2", fillOpacity: 1
+                }).addTo(routeLayer);
+            });
+        }
+
+        const m = data.metrics;
+        document.getElementById("points").textContent = data.selected_points_count || "—";
+        document.getElementById("coverageResult").textContent = m.coverage_percent + "%";
+        document.getElementById("distance").textContent = m.route_length_km + " км";
+        document.getElementById("timeResult").textContent = m.flight_time_min + " мин";
+
+        const dm = document.getElementById("droneMetrics");
+        dm.innerHTML = "";
+        if (data.drone_metrics) {
+            data.drone_metrics.forEach(d => {
+                dm.innerHTML += `<div>${d.drone_id}: ${d.distance_km} км, ${d.time_min} мин</div>`;
+            });
+        }
+
+        showMessage("success", "Маршрут построен!");
+
+        if (m.endurance_warning) {
+            const rec = m.recommended_drones || "больше";
+            showMessage("warning", `Время полёта превышает запас хода! Рекомендуется дронов: ${rec}`);
+        }
+
+    } catch (error) {
+        showMessage("error", "Ошибка: " + error.message);
+    }
+}
+
+async function downloadKml() {
+    if (!lastDroneRoutes && !lastRoute) {
+        showMessage("error", "Сначала рассчитайте маршрут.");
+        return;
+    }
+
+    try {
+        let endpoint = "/api/export/kml";
+        let body;
+
+        if (lastDroneRoutes && Object.keys(lastDroneRoutes).length > 0) {
+            endpoint = "/api/export/kml/multi";
+            body = {
+                drone_routes: lastDroneRoutes,
+                landing_zones: landingZones,
+                no_fly_zones: noFlyZones,
+                altitude: 100
+            };
+        } else {
+            body = { route: lastRoute, altitude: 100, format: "kml" };
+        }
+
+        const response = await fetch(endpoint, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(body)
+        });
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "route.kml";
+        a.click();
+        window.URL.revokeObjectURL(url);
+    } catch (error) {
+        showMessage("error", "Ошибка экспорта: " + error.message);
+    }
+}
+
+function clearMap() {
+    drawing = false;
+    drawingNfz = false;
+    addingLanding = false;
+    polygonPoints = [];
+    nfzPoints = [];
+    noFlyZones = [];
+    landingZones = [];
+    clearDrawingOnly();
+    routeLayer.clearLayers();
+    landingLayer.clearLayers();
+    if (nfzLayer) {
+        map.removeLayer(nfzLayer);
+        nfzLayer = null;
+    }
+    lastRoute = null;
+    lastDroneRoutes = null;
+    document.getElementById("points").textContent = "—";
+    document.getElementById("coverageResult").textContent = "—";
+    document.getElementById("distance").textContent = "—";
+    document.getElementById("timeResult").textContent = "—";
+    document.getElementById("droneMetrics").innerHTML = "";
+    hideMessages();
+}
+
+function showMessage(type, message) {
+    hideMessages();
+    const el = document.getElementById(type);
+    if (!el) return;
+    el.textContent = message;
+    el.style.display = "block";
+}
+
+function hideMessages() {
+    ["success", "error", "warning"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = "none";
+    });
+}
+
+document.getElementById("drawButton").addEventListener("click", startDrawing);
+document.getElementById("drawNfzButton").addEventListener("click", startDrawingNfz);
+document.getElementById("addLandingButton").addEventListener("click", startAddingLanding);
+document.getElementById("calculateButton").addEventListener("click", calculateRoute);
+document.getElementById("kmlButton").addEventListener("click", downloadKml);
+document.getElementById("clearButton").addEventListener("click", clearMap);
+</script>
+
+</body>
+</html>
